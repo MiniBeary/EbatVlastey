@@ -9,7 +9,7 @@ static class Program {
         if(args.Contains("--self-test")) {
             try {
                 using var bundle=CertificateFactory.Generate(); ConstraintVerifier.Verify(bundle,DateTimeOffset.UtcNow,false);
-                var result=new {ok=true,version="0.1.2",mode="read-only",os=Environment.OSVersion.VersionString,cases=bundle.Probes.Length};
+                var result=new {ok=true,version="0.1.3",mode="read-only",os=Environment.OSVersion.VersionString,cases=bundle.Probes.Length};
                 var json=JsonSerializer.Serialize(result); Console.WriteLine(json);
                 var report=Array.IndexOf(args,"--report"); if(report>=0 && report+1<args.Length) File.WriteAllText(args[report+1],json);
                 return 0;
@@ -29,7 +29,7 @@ sealed class MainForm : Form {
     readonly TrustService service;
     bool busy;
     public MainForm(bool smoke) {
-        Text="EbatVlastey 0.1.2 — предварительная версия"; ClientSize=new Size(780,510); MinimumSize=new Size(690,430); StartPosition=FormStartPosition.CenterScreen;
+        Text="EbatVlastey 0.1.3 — предварительная версия"; ClientSize=new Size(780,510); MinimumSize=new Size(690,430); StartPosition=FormStartPosition.CenterScreen;
         Font=new Font("Segoe UI",10); Padding=new Padding(18);
         service=new TrustService(new WindowsTrustStores(),backupPath,WindowsIdentity.GetCurrent().User?.Value ?? throw new InvalidOperationException("Нет пользователя Windows."));
         var layout=new TableLayoutPanel{Dock=DockStyle.Fill,ColumnCount=1,RowCount=5}; layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize)); layout.RowStyles.Add(new RowStyle(SizeType.Percent,100)); layout.RowStyles.Add(new RowStyle(SizeType.AutoSize));

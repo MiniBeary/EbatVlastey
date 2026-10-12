@@ -4,6 +4,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Formats.Asn1;
 
+if(args.FirstOrDefault()=="--inheritance-child") return BrowserSecurity.CheckInheritedHandle(args[1]);
 var failures = 0;
 Run("Real Windows name constraints and original public keys", () => {
     using var bundle = CertificateFactory.Generate();
@@ -62,6 +63,11 @@ if(args.Contains("--browsers")) Run("Real Chrome/Edge do not accept an untrusted
         Console.WriteLine("  verified CDP and TLS in " + Path.GetFileName(executable));
     }
 });
+if(args.Contains("--browsers")) Run("Browser control is unavailable through local IPv4 and IPv6 TCP ports", () => BrowserSecurity.NoTcpControl().GetAwaiter().GetResult());
+Run("Browser pipe preserves fragmented and coalesced UTF-8 messages", () => BrowserSecurity.Framing().GetAwaiter().GetResult());
+Run("Browser launch does not inherit unrelated handles", () => BrowserSecurity.HandleIsolation().GetAwaiter().GetResult());
+Run("Browser startup failure removes its temporary profile", () => BrowserSecurity.StartFailure().GetAwaiter().GetResult());
+if(args.Contains("--browsers")) Run("Browser pipe navigation still receives a successful local HTTP response", () => BrowserSecurity.Navigation().GetAwaiter().GetResult());
 using(var sources = SourceCatalog.Load()) {
     Run("Verify before installation reports a missing journal without changing trust", () => {
         foreach(var existingFolder in new[]{false,true}) WithService(2,TrustScope.User,(store,service,folder)=> {

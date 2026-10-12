@@ -2,7 +2,6 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Security;
 using System.Net.Sockets;
-using System.Net.WebSockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
@@ -92,29 +91,30 @@ public static class BrowserProbe {
 sealed class CdpBrowser : IAsyncDisposable {
     readonly Process process;
     readonly string profile;
-    readonly ClientWebSocket socket=new();
+    readonly BrowserPipe pipe;
     readonly Queue<JsonElement> events=new();
+    string? session;
     int sequence;
-    CdpBrowser(Process process,string profile) { this.process=process; this.profile=profile; }
+    CdpBrowser(Process process,string profile,BrowserPipe pipe) { this.process=process; this.profile=profile; this.pipe=pipe; }
     public static async Task<CdpBrowser> Start(string executable) {
-        var profile=Path.Combine(Path.GetTempPath(),"EbatVlastey-Browser-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(profile);
-        var info=new ProcessStartInfo(executable){UseShellExecute=false,CreateNoWindow=true};
-        foreach(var arg in new[]{"--headless=new","--remote-debugging-port=0","--user-data-dir="+profile,"--no-first-run","--no-default-browser-check","--disable-background-networking","--disable-component-update","--disable-sync","--no-proxy-server","--host-resolver-rules=MAP * 127.0.0.1, EXCLUDE localhost","about:blank"}) info.ArgumentList.Add(arg);
-        var process=Process.Start(info) ?? throw new IOException("Не удалось запустить браузер."); var browser=new CdpBrowser(process,profile);
+        var profile=Path.Combine(Path.GetTempPath(),"EbatVlastey-Browser-"+Guid.NewGuid().ToString("N"));
+        BrowserPipe? pipe=null; CdpBrowser? browser=null;
         try {
+            Directory.CreateDirectory(profile); pipe=new BrowserPipe();
+            var arguments=new[]{"--headless=new","--remote-debugging-pipe","--remote-debugging-io-pipes="+pipe.ChildHandles,"--user-data-dir="+profile,"--no-first-run","--no-default-browser-check","--disable-background-networking","--disable-component-update","--disable-sync","--no-proxy-server","--host-resolver-rules=MAP * 127.0.0.1, EXCLUDE localhost","about:blank"};
+            var process=BrowserPipeProcess.Start(executable,arguments,pipe.ChildInput,pipe.ChildOutput);
+            browser=new CdpBrowser(process,profile,pipe); pipe.StartReading();
             using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(25));
-            var portFile=Path.Combine(profile,"DevToolsActivePort"); string? port=null;
-            while(port==null) {
-                timeout.Token.ThrowIfCancellationRequested(); if(process.HasExited) throw new IOException("Браузер завершился до проверки.");
-                try { if(File.Exists(portFile)) { var first=File.ReadAllLines(portFile).FirstOrDefault(); if(int.TryParse(first,out var n) && n is >0 and <65536) port=first; } } catch(IOException) { }
-                if(port==null) await Task.Delay(100,timeout.Token);
-            }
-            using var http=new HttpClient(new HttpClientHandler{UseProxy=false});
-            var targets=JsonDocument.Parse(await http.GetStringAsync($"http://127.0.0.1:{port}/json/list",timeout.Token));
-            var target=targets.RootElement.EnumerateArray().First(t=>t.GetProperty("type").GetString()=="page").GetProperty("webSocketDebuggerUrl").GetString()!;
-            var uri=new Uri(target); if(!uri.IsLoopback) throw new IOException("Недопустимый адрес проверки браузера.");
-            await browser.socket.ConnectAsync(uri,timeout.Token); await browser.Command("Page.enable",new{},timeout.Token); await browser.Command("Network.enable",new{},timeout.Token); return browser;
-        } catch { await browser.DisposeAsync(); throw; }
+            var targets=await browser.Command("Target.getTargets",new{},timeout.Token);
+            var target=targets.GetProperty("targetInfos").EnumerateArray().First(t=>t.GetProperty("type").GetString()=="page").GetProperty("targetId").GetString();
+            var attached=await browser.Command("Target.attachToTarget",new{targetId=target,flatten=true},timeout.Token);
+            browser.session=attached.GetProperty("sessionId").GetString();
+            await browser.Command("Page.enable",new{},timeout.Token); await browser.Command("Network.enable",new{},timeout.Token); return browser;
+        } catch {
+            if(browser!=null) await browser.DisposeAsync();
+            else { if(pipe!=null) await pipe.DisposeAsync(); await DeleteProfile(profile); }
+            throw;
+        }
     }
     public async Task<string> Navigate(string url) {
         using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(12)); events.Clear();
@@ -130,21 +130,23 @@ sealed class CdpBrowser : IAsyncDisposable {
         }
     }
     async Task<JsonElement> Command(string method,object parameters,CancellationToken token) {
-        var id=++sequence; var bytes=JsonSerializer.SerializeToUtf8Bytes(new{id,method,@params=parameters}); await socket.SendAsync(bytes,WebSocketMessageType.Text,true,token);
+        var id=++sequence;
+        var message=new Dictionary<string,object?>{{"id",id},{"method",method},{"params",parameters}};
+        if(session!=null) message["sessionId"]=session;
+        await pipe.Send(JsonSerializer.SerializeToUtf8Bytes(message),token);
         while(true) {
             var result=await Receive(token);
             if(result.TryGetProperty("id",out var responseId) && responseId.GetInt32()==id) { if(result.TryGetProperty("error",out var error)) throw new IOException(error.ToString()); return result.GetProperty("result"); }
-            events.Enqueue(result);
+            if(session!=null && result.TryGetProperty("sessionId",out var source) && source.GetString()==session) events.Enqueue(result);
         }
     }
-    async Task<JsonElement> Receive(CancellationToken token) {
-        using var stream=new MemoryStream(); var buffer=new byte[8192]; WebSocketReceiveResult part;
-        do { part=await socket.ReceiveAsync(new ArraySegment<byte>(buffer),token); if(part.MessageType==WebSocketMessageType.Close) throw new IOException("Соединение с браузером закрыто."); stream.Write(buffer,0,part.Count); if(stream.Length>2_000_000) throw new IOException("Слишком большой ответ браузера."); } while(!part.EndOfMessage);
-        using var json=JsonDocument.Parse(stream.ToArray()); return json.RootElement.Clone();
-    }
+    Task<JsonElement> Receive(CancellationToken token)=>pipe.Receive(token);
     public async ValueTask DisposeAsync() {
-        socket.Dispose(); try { if(!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); } catch(InvalidOperationException) { } finally { process.Dispose(); }
+        try { if(!process.HasExited) process.Kill(true); await process.WaitForExitAsync(); } catch(InvalidOperationException) { }
+        finally { process.Dispose(); await pipe.DisposeAsync(); await DeleteProfile(profile); }
+    }
+    static async Task DeleteProfile(string profile) {
         if(!Path.GetFullPath(profile).StartsWith(Path.GetFullPath(Path.GetTempPath()),StringComparison.OrdinalIgnoreCase) || !Path.GetFileName(profile).StartsWith("EbatVlastey-Browser-",StringComparison.Ordinal)) throw new IOException("Недопустимый путь временного профиля.");
-        for(var attempt=0;attempt<3;attempt++) try { Directory.Delete(profile,true); break; } catch(IOException) { await Task.Delay(200); } catch(UnauthorizedAccessException) { await Task.Delay(200); }
+        for(var attempt=0;attempt<3;attempt++) try { if(Directory.Exists(profile)) Directory.Delete(profile,true); break; } catch(IOException) { await Task.Delay(200); } catch(UnauthorizedAccessException) { await Task.Delay(200); }
     }
 }
