@@ -1,0 +1,13 @@
+.tools/
+.work/
+artifacts/
+**/bin/
+**/obj/
+.vs/
+*.user
+*.pfx
+*.p12
+*.key
+*.serialized
+manifest.json
+stores-before.json
