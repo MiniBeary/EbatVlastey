@@ -65,6 +65,7 @@ public sealed class TrustService(ITrustStores stores,string directory,string use
         if(State is "Applying" or "RollingBack") RestoreInternal(Read());
     }
     void VerifyInternal() {
+        if(!File.Exists(Path.Combine(directory,"manifest.json"))) throw new InvalidOperationException("Проверка недоступна: журнал установки не найден.");
         var m = Read(); if(m.State != "Applied") throw new InvalidOperationException("Ограничение этой программой не установлено.");
         try { ValidateBackups(m); using var bundle=LoadBundle(m); CheckInstalled(m); stores.VerifyChains(bundle,m.Created); }
         catch(Exception failure) {

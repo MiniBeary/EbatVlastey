@@ -63,6 +63,16 @@ if(args.Contains("--browsers")) Run("Real Chrome/Edge do not accept an untrusted
     }
 });
 using(var sources = SourceCatalog.Load()) {
+    Run("Verify before installation reports a missing journal without changing trust", () => {
+        foreach(var existingFolder in new[]{false,true}) WithService(2,TrustScope.User,(store,service,folder)=> {
+            if(existingFolder) Directory.CreateDirectory(folder);
+            var before=store.Digest(); Exception? failure=null;
+            try {service.Verify();} catch(Exception ex) {failure=ex;}
+            Assert(failure is InvalidOperationException && failure.Message=="Проверка недоступна: журнал установки не найден.","Expected a clear missing-journal message, got: " + failure?.Message);
+            Assert(store.Operations==0 && store.Digest()==before,"Checking before installation changed trust");
+            Assert(service.State=="None" && !File.Exists(Path.Combine(folder,"manifest.json")),"Checking before installation created an installation");
+        });
+    });
     foreach(var count in new[]{0,1,2}) Run($"Install/restore preserves baseline with {count} originals", () => {
         WithService(count,TrustScope.User,(store,service,folder)=> {
             var before=store.Digest(); service.Install(); service.Verify();

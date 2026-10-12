@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
-  <PropertyGroup><OutputType>WinExe</OutputType><UseWindowsForms>true</UseWindowsForms><AssemblyName>EbatVlastey</AssemblyName><Version>0.1.1</Version><ApplicationManifest>app.manifest</ApplicationManifest></PropertyGroup>
+  <PropertyGroup><OutputType>WinExe</OutputType><UseWindowsForms>true</UseWindowsForms><AssemblyName>EbatVlastey</AssemblyName><Version>0.1.2</Version><ApplicationManifest>app.manifest</ApplicationManifest></PropertyGroup>
   <ItemGroup><ProjectReference Include="../EbatVlastey.Core/EbatVlastey.Core.csproj" /></ItemGroup>
   <ItemGroup>
     <EmbeddedResource Include="../../LICENSE" LogicalName="License.Project" />
