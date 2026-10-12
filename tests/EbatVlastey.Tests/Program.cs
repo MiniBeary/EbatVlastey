@@ -5,6 +5,7 @@ using System.Net.Sockets;
 using System.Formats.Asn1;
 
 if(args.FirstOrDefault()=="--inheritance-child") return BrowserSecurity.CheckInheritedHandle(args[1]);
+if(args.Contains("--http-fixture")) { BrowserSecurity.HttpFixtureHandlesIdleConnection().GetAwaiter().GetResult(); return 0; }
 var failures = 0;
 Run("Real Windows name constraints and original public keys", () => {
     using var bundle = CertificateFactory.Generate();
@@ -67,6 +68,7 @@ if(args.Contains("--browsers")) Run("Browser control is unavailable through loca
 Run("Browser pipe preserves fragmented and coalesced UTF-8 messages", () => BrowserSecurity.Framing().GetAwaiter().GetResult());
 Run("Browser launch does not inherit unrelated handles", () => BrowserSecurity.HandleIsolation().GetAwaiter().GetResult());
 Run("Browser startup failure removes its temporary profile", () => BrowserSecurity.StartFailure().GetAwaiter().GetResult());
+Run("Local HTTP fixture serves a request while an idle connection is open", () => BrowserSecurity.HttpFixtureHandlesIdleConnection().GetAwaiter().GetResult());
 if(args.Contains("--browsers")) Run("Browser pipe navigation still receives a successful local HTTP response", () => BrowserSecurity.Navigation().GetAwaiter().GetResult());
 using(var sources = SourceCatalog.Load()) {
     Run("Verify before installation reports a missing journal without changing trust", () => {

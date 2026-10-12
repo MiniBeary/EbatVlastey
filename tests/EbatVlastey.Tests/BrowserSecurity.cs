@@ -60,17 +60,48 @@ static class BrowserSecurity {
         foreach(var executable in BrowserProbe.InstalledBrowsers()) {
             using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(20));
             using var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
-            var serve=Task.Run(async()=> {
-                using var client=await listener.AcceptTcpClientAsync(timeout.Token); using var stream=client.GetStream();
-                var buffer=new byte[4096]; if(await stream.ReadAsync(buffer,timeout.Token)==0) throw new IOException("No HTTP request received");
-                await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"),timeout.Token);
-            });
+            var serve=ServeHttp(listener,timeout.Token);
             await using var browser=await CdpBrowser.Start(executable);
             var result=await browser.Navigate($"http://test.ru:{((IPEndPoint)listener.LocalEndpoint).Port}/probe");
             await serve;
             if(result!="OK") throw new Exception("Successful local navigation failed: " + result);
             Console.WriteLine("  successful pipe navigation in " + Path.GetFileName(executable));
         }
+    }
+    public static async Task HttpFixtureHandlesIdleConnection() {
+        using var timeout=new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        using var listener=new TcpListener(IPAddress.Loopback,0); listener.Start();
+        var serve=ServeHttp(listener,timeout.Token);
+        var port=((IPEndPoint)listener.LocalEndpoint).Port;
+        using var idle=new TcpClient(); await idle.ConnectAsync(IPAddress.Loopback,port,timeout.Token);
+        await Task.Delay(50,timeout.Token);
+        using var request=new TcpClient(); await request.ConnectAsync(IPAddress.Loopback,port,timeout.Token);
+        using var stream=request.GetStream();
+        await stream.WriteAsync(Encoding.ASCII.GetBytes("GET /probe HTTP/1.1\r\nHost: localhost\r\n\r\n"),timeout.Token);
+        var buffer=new byte[4096]; var count=await stream.ReadAsync(buffer,timeout.Token);
+        if(!Encoding.ASCII.GetString(buffer,0,count).Contains("200 OK")) throw new Exception("Idle connection blocked the real request");
+        await serve;
+    }
+    static async Task ServeHttp(TcpListener listener,CancellationToken token) {
+        using var stop=CancellationTokenSource.CreateLinkedTokenSource(token);
+        var replied=new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var clients=new List<Task>();
+        async Task Reply(TcpClient client) {
+            using(client) try {
+                using var stream=client.GetStream(); var buffer=new byte[4096];
+                if(await stream.ReadAsync(buffer,stop.Token)==0) return;
+                await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"),stop.Token);
+                replied.TrySetResult();
+            } catch(Exception ex) when(ex is OperationCanceledException or IOException) { }
+        }
+        async Task Accept() {
+            try {
+                while(!stop.IsCancellationRequested) clients.Add(Reply(await listener.AcceptTcpClientAsync(stop.Token)));
+            } catch(Exception ex) when(stop.IsCancellationRequested && ex is OperationCanceledException or SocketException or ObjectDisposedException) { }
+        }
+        var accepting=Accept();
+        try { await replied.Task.WaitAsync(token); }
+        finally {stop.Cancel(); listener.Stop(); await accepting; await Task.WhenAll(clients);}
     }
     static int[] ListeningPorts(int pid,uint family) {
         uint size=0; GetExtendedTcpTable(IntPtr.Zero,ref size,false,family,3,0);
